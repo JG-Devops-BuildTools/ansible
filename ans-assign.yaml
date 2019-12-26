@@ -1,0 +1,195 @@
+---
+- hosts: all
+  become: true
+  tasks:
+    - name: update OS to latest version
+      yum:
+        name: "*"
+        state: latest
+      tags:
+        - master
+        - nodes
+
+    - name: install java-1.8
+      yum: 
+        name: ["java-1.8.0-openjdk-devel", "git", "wget"] 
+        state: installed
+      tags:
+        - master
+        - nodes
+
+    - name: install maven
+      get_url: 
+        url: https://www-eu.apache.org/dist/maven/maven-3/3.2.5/binaries/apache-maven-3.2.5-bin.zip
+        dest: /opt/
+        owner: root
+      tags:
+        - master
+
+    - name: extract maven archive
+      unarchive:
+         source: /opt/apache-maven-3.2.5-bin.zip
+         dest: /opt/
+      tags:
+        - master
+
+    - name: rename the maven home
+      command: creates="/opt/maven" mv /opt/apache-maven-3.2.5 /opt/maven
+      tags:
+        - master
+
+    - name: set java, maven home as environment variable
+      blockinfile:
+        insertafter: EOF
+        path: /etc/profile
+        block: |
+             export JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk
+             export M2_HOME=/opt/maven/
+             PATH=$PATH:$JAVA_HOME/bin:$M2_HOME/bin
+      tags:
+        - master
+
+    - name: source the profile
+      command: source /etc/profile
+      tags:
+        - master
+        - nodes
+
+    - name: set java home as environment variable
+      blockinfile:
+        insertafter: EOF
+        path: /etc/profile
+        block: |
+             export JAVA_HOME=/usr/lib/jvm/java-1.8.0-openjdk
+             PATH=$PATH:$JAVA_HOME/bin
+      tags:
+        - nodes
+
+    - name: source the profile
+      command: source /etc/profile
+      tags:
+        - master
+        - nodes
+
+    - name: check maven versions
+      command: mvn -version 
+      register: mvn-ver
+      tags:
+        - master
+
+    - name: check java version
+      command: java -version
+      register: java-ver
+      tags:
+        - master
+        - nodes
+
+    - name: print java version
+      debug: var=java-ver
+      tags:
+        - master
+        - nodes
+
+    - name: print maven version
+      debug: var=mvn-ver
+      tags:
+        - master
+        - nodes
+
+    - name: download tomcat
+      get_url:
+        url: http://mirrors.fibergrid.in/apache/tomcat/tomcat-8/v8.5.35/bin/apache-tomcat-8.5.35.tar.gz
+        dest: /opt/
+        owner: root
+      tags:
+        - nodes
+
+    - name: extract the tomcat binaries
+      unarchive: 
+        source: /opt/apache-tomcat-8.5.35.tar.gz
+        dest: /opt/
+      tags:
+        - nodes
+
+    - name: rename the tomcat home
+      command: creates="/opt/tomcat" mv /opt/apache-tomcat-8.5.35 /opt/tomcat
+      tags:
+        - nodes
+
+    - name: configure the tomcate user profile
+      blockinfile:
+        insertafter: EOF
+        path: /opt/tomcat/conf/tomcat-users.xml
+        block: |
+           <tomcat-users>
+           <role rolename="manager-gui"/>
+           <role rolename="manager-script"/>
+           <role rolename="manager-jmx"/>
+           <role rolename="manager-status"/>
+           <user username="admin" password="admin" roles="manager-gui, manager-script, manager-jmx, manager-status"/>
+           <user username="script " password="script" roles="manager-script"/>
+           <user username="tomcat" password="tomcat" roles="manager-gui"/>
+           </tomcat-users>
+      tags:
+        - nodes
+
+    - name: start tomcat
+      command: sh /opt/tomcat/bin/startup.sh
+      notify: verify the tomcat url
+      notify: verify the port 8080
+      tags: 
+        - nodes
+
+#clone 
+    - name: create repo  directory  
+      file: 
+        path: /opt/repos
+        state: directory
+        owner: root
+        mode: '0755'
+      tags:
+       - master
+
+    - name: git clone
+      git:
+        repo: 'https://github.com/JG-Devops-BuildTools/KCMavenWebProject.git'
+        dest: /opt/repos
+        version: master
+      tags: 
+       - master
+   
+    - name: build code
+      command: mvn clean install
+      args:
+        chdir: /opt/repos/KCMavenWebProject/
+      tags:
+        - master
+
+    - name: copy artifact to nodes
+      copy:
+        src: /opt/repos/KCMavenWebProject/target/app.war
+        dest: /opt/tomcat/webapp/
+      delegate_to: master
+      tags:
+       - node
+      notify: stop tomcat
+      notify: start tomcat
+      notify: verify the tomcat url
+      notify: verify the port 8080
+
+  handlers:
+    - name: stop tomcat
+      command: sh /opt/tomcat/bin/shutdown.sh
+
+    - name: start tomcat
+      command: sh /opt/tomcat/bin/startup.sh
+
+    - name: verify the tomcat url
+      uri:
+        url: http://localhost:8080
+
+    - name: verify the port 8080
+      wait_for:
+        host: localhost
+        port: 8080
+        state: started
